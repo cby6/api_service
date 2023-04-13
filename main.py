@@ -1,12 +1,14 @@
-from flask import Flask, request
+from flask import Flask, request, render_template, session, url_for, redirect
 from flasgger import Swagger
 import aerospike
 from pymongo import MongoClient
 from google.cloud.bigquery_storage_v1 import types
 from google.cloud import bigquery_storage_v1
 import os
+import secrets
 
 app = Flask(__name__)
+app.secret_key = secrets.token_bytes(32)
 swagger = Swagger(app)
 
 class Aerospike():
@@ -27,7 +29,7 @@ class Aerospike():
             _, _, record = self.aero_client.get(key)
             return record['bin']
         except:
-            return 'cannot user find in aerospike'
+            return None
 
 class Mongo():
     def __init__(self):
@@ -80,8 +82,7 @@ mongo = Mongo()
 seg_dict = mongo.scan_mongo()
 user_mapping = read_table()
 
-@app.route('/')
-def find_segment():
+def find_segment(user_id):
     """return a dictionary of user profile
     ---
     parameters:
@@ -91,8 +92,11 @@ def find_segment():
         required: true
     """
 
-    user_id = request.args.get('id').strip()
+    validate_user_id(user_id)
     user_segment_dict = aero.query_aero(user_id)
+    if user_segment_dict is None:
+        return f'cannot find associated segments for user {user_id}'
+    
     output = {user_id: {}}
     for seg in user_segment_dict:
         output[user_id][seg] = seg_dict[seg]
@@ -105,6 +109,27 @@ def find_segment():
             output[mapping_id][seg] = seg_dict[seg]
 
     return output
+
+def validate_user_id(user_id):
+    user_id = str(user_id).strip()
+    if len(user_id) > 100:
+        raise ValueError('user id is too long')
+    if len(user_id) < 5:
+        raise ValueError('user id is too short')
+
+
+@app.route('/query_user', methods=['GET', 'POST'])
+def query_user():
+    if request.method == 'POST':
+        user_id = request.form['user_id']
+        session['user_id'] = user_id
+        return find_segment(user_id)
+    return render_template('query_user.html') 
+
+@app.route('/')
+def main():
+    return find_segment(request.args.get('id'))
+            
 
 if __name__ == '__main__':
     app.run(port=7000)
